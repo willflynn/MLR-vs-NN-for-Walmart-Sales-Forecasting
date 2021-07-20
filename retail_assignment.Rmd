@@ -1,0 +1,506 @@
+---
+title: "Untitled"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+```
+
+
+```{r}
+library(readxl)
+
+setwd("C:/Users/willi/Desktop")
+
+stores <- read.csv("stores.csv")
+features <- read.csv("features.csv")
+sales <- read.csv("train.csv")
+```
+
+```{r}
+head(stores)
+```
+
+```{r}
+head(features)
+```
+
+```{r}
+head(sales)
+```
+
+```{r}
+library(dplyr)
+data <- left_join(sales, stores, by='Store')
+data <- left_join(data, features, by=c("Store", "Date", "IsHoliday"))
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+summary(data$Weekly_Sales)
+```
+```{r}
+length(unique(data$Dept))
+```
+
+
+```{r}
+hist(log(data$Weekly_Sales), col = 'light green', main = "Weekly Sales", xlab ='log(Weekly Sales)')
+```
+```{r}
+# number of negative weekly sales values
+
+length(which(data$Weekly_Sales < 0))
+```
+```{r}
+# remove negative values
+
+data <- data %>% filter(Weekly_Sales >= 0)
+```
+
+```{r}
+par(mfrow=c(3,2))
+hist(data$Size, col = 'light green', main = "Store Size")
+hist(data$Temperature, col = 'light green', main = "Temperature")
+hist(data$Fuel_Price, col = 'light green', main = "Fuel Price")
+hist(data$CPI, col = 'light green', main = "CPI")
+hist(data$Unemployment, col = 'light green', main = "Unemployment")
+hist(data$MarkDown1, col = 'light green', main = "Promotional Markdown")
+```
+```{r}
+# replace NA values in markdown columns with 0
+
+data[is.na(data)] <- 0
+```
+
+```{r}
+# correlation matrix
+library(corrplot)
+
+corr_data <- data %>% select(Size, Weekly_Sales, Temperature, Fuel_Price, MarkDown1, MarkDown2, MarkDown3, MarkDown4, MarkDown5, CPI, Unemployment)
+
+res <- cor(corr_data)
+
+corrplot(res, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+```
+
+```{r}
+# Month column
+data$Month <- as.Date(data$Date, format = "%Y-%m-%d")
+data$Month <- format(data$Month, "%m")
+
+# Year column
+data$Year <- as.Date(data$Date, format = "%Y-%m-%d")
+data$Year <- format(data$Year, "%Y")
+
+# Day column
+data$Day <- as.Date(data$Date, format = "%Y-%m-%d")
+data$Day <- format(data$Day, "%d")
+
+# Week column 
+data$Week <- as.Date(data$Date, format = "%Y-%m-%d")
+data$Week <- format(data$Week, "%V")
+```
+
+```{r}
+# Detect seasonal trends
+library(ggplot2)
+options(scipen=10000)
+ggplot(data, aes(x = Month, y = Weekly_Sales)) + 
+  geom_col() + 
+  facet_wrap(~Year) + 
+  ggtitle("Monthly Sales By Year") +
+  ylab("Weekly Sales")
+```
+
+
+```{r}
+# create week type variables based on how much a store generally sells
+# Use 2011 as the base year as it is the only year where all data is available
+
+Weeks_A <- data %>% 
+  filter(Year == 2011, Type == "A") %>% 
+  group_by(Type, Week) %>% 
+  summarise(Size = mean(Size), WeeklySales = sum(Weekly_Sales))
+
+Weeks_B <- data %>% 
+  filter(Year == 2011, Type == "B") %>% 
+  group_by(Type, Week) %>% 
+  summarise(Size = mean(Size), WeeklySales = mean(Weekly_Sales))
+
+Weeks_C <- data %>% 
+  filter(Year == 2011, Type == "C") %>% 
+  group_by(Type, Week) %>% 
+  summarise(Size = mean(Size), WeeklySales = mean(Weekly_Sales))
+
+
+#Calculating upper and lower threshold based on 5% bounds
+Weeks_A$MeanSales <- mean(Weeks_A$WeeklySales)
+Weeks_B$MeanSales <- mean(Weeks_B$WeeklySales)
+Weeks_C$MeanSales <- mean(Weeks_C$WeeklySales)
+
+Weeks_A$SalesUpperThreshold <- mean(Weeks_A$WeeklySales) * 1.05
+Weeks_A$SalesLowerThreshold <- mean(Weeks_A$WeeklySales) * 0.95
+
+Weeks_B$SalesUpperThreshold <- mean(Weeks_B$WeeklySales) * 1.05
+Weeks_B$SalesLowerThreshold <- mean(Weeks_B$WeeklySales) * 0.95
+
+Weeks_C$SalesUpperThreshold <- mean(Weeks_C$WeeklySales) * 1.05
+Weeks_C$SalesLowerThreshold <- mean(Weeks_C$WeeklySales) * 0.95
+
+ggplot(Weeks_A, aes(x = Week,y = WeeklySales)) + 
+  geom_col()+
+  ggtitle("Weekly Sales Average")
+```
+```{r}
+Weeks_A$WeekType = "Medium"
+Weeks_A[which(Weeks_A$WeeklySales > Weeks_A$SalesUpperThreshold), 8] = "High"
+Weeks_A[which(Weeks_A$WeeklySales < Weeks_A$SalesLowerThreshold), 8] = "Low"
+
+Weeks_B$WeekType = "Medium"
+Weeks_B[which(Weeks_B$WeeklySales > Weeks_B$SalesUpperThreshold), 8] = "High"
+Weeks_B[which(Weeks_B$WeeklySales < Weeks_B$SalesLowerThreshold), 8] = "Low"
+
+Weeks_C$WeekType = "Medium"
+Weeks_C[which(Weeks_C$WeeklySales > Weeks_C$SalesUpperThreshold), 8] = "High"
+Weeks_C[which(Weeks_C$WeeklySales < Weeks_C$SalesLowerThreshold), 8] = "Low"
+
+Weeks2011 <- rbind(Weeks_A[,c(1,2,8)], Weeks_B[,c(1,2,8)], Weeks_C[,c(1,2,8)])
+
+#Adding weektype to main data
+
+data <- merge(data, Weeks2011, by = c("Type", "Week"))
+```
+
+```{r}
+data_2011 <- data %>% filter(Year == 2011) %>% 
+  group_by(Store, Month, Week, WeekType, Type, IsHoliday) %>% 
+  summarise(WeeklySales = sum(Weekly_Sales), Size = mean(Size))
+
+ggplot(data_2011, aes(x = Week,y = WeeklySales, fill = WeekType)) + 
+  geom_col() +
+  facet_wrap(~Type) +
+  ylab('Weekly Sales')
+```
+
+```{r}
+# making categorical variables for week type
+
+library(fastDummies)
+data <- dummy_cols(data, select_columns = 'WeekType')
+```
+
+```{r}
+# Store types
+
+ggplot(data, aes(x = Week,y = Weekly_Sales)) + 
+  geom_col() +
+  facet_wrap(~Type)
+```
+```{r}
+ggplot(data, aes(x=Size, y = Weekly_Sales)) + 
+  geom_point() + ggtitle("Weekly Sales by Size") + scale_y_continuous(limits=c(0,500000))
+```
+
+
+```{r}
+# create lagged dependent variable of Weekly_Sales (group by store and dept)
+
+library(dplyr)
+
+data <- data[order(as.Date(data$Date, format="%Y-%m-%d")),]
+data <- data %>% 
+    group_by(Store, Dept) %>%
+    mutate(Weekly_Sales_Prev = lag(Weekly_Sales, n = 1, default = NA))
+```
+
+
+```{r}
+# test to see if lagged variable is right
+
+test1 <- data %>%  filter(Store == 42, Dept == 20)
+test1 <- test1[order(as.Date(test1$Date, format="%Y-%m-%d")),]
+head(test1, 20)
+```
+
+```{r}
+#data$IsHoliday <- as.integer(as.logical(data$IsHoliday))
+```
+
+
+```{r}
+# variables for store types
+
+data <- dummy_cols(data, select_columns = 'Type')
+```
+
+```{r}
+# Interaction term for markdown promotions
+
+data$MarkDown <- data$MarkDown1 + data$MarkDown2 + data$MarkDown3 + data$MarkDown4 + data$MarkDown5
+data$MarkDown_sales_lag <- data$MarkDown*data$Weekly_Sales_Prev
+```
+
+```{r}
+# Finally, need to see which departments have the greatest effect on sales
+# Could create dummies for every department but due to computational power we can't have 99 variables
+# instead use heat map and correlation map for detecting significant departments to include in regression
+
+# first remove departments with no values
+heat_df <- data[ , colSums(is.na(data)) == 0]
+
+
+heat_df <- data %>% select('Store', 'Dept', 'Weekly_Sales')
+heat_map <- heat_df %>% group_by(Store, Dept) %>% summarise(sales = mean(Weekly_Sales))
+ggplot(data = heat_map, mapping = aes(x = Dept, y = Store, fill = sales)) +
+  geom_tile() +
+  scale_x_continuous(limits = c(0,99), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0,45), expand = c(0, 0)) +
+  xlab(label = "Department") +
+  scale_fill_distiller(palette = "RdPu")
+
+# add colour palette 
+```
+```{r}
+dept_vars <- heat_map %>% filter(sales > 120000)
+dept_vars
+```
+
+```{r}
+# by looking at the t statistics departments 38, 92 and 95 have the largest impacts on sales
+
+# variables for store types
+
+data$Dept_38 <- ifelse(data$Dept == '38', 1, 0)
+data$Dept_92 <- ifelse(data$Dept == '92', 1, 0)
+data$Dept_95 <- ifelse(data$Dept == '95', 1, 0)
+```
+
+```{r}
+data[is.na(data)] <- 0
+```
+
+```{r}
+data[order(as.Date(data$Date, format="%Y-%m-%d")),]
+```
+
+```{r}
+# Walmart provide a test set without weekly sales to forecast over
+# however the focus is to simply estimate the error from the two models and we cannot do that 
+# as there are no actual sales in the test set
+# split training data set into training and test data (test set is used to forecast and obtain MAE and RMSE)
+
+index <- sample(seq_len(nrow(data)), size = floor(nrow(data) * 0.8))
+
+train <- data[index,]
+test <- data[-index,]
+```
+
+```{r}
+# AIC Test
+
+data.null <- lm(Weekly_Sales ~ 1, data) %>% stats::step(direction = "both") #only include intercept
+data.full <- lm(formula = Weekly_Sales ~ Weekly_Sales_Prev + IsHoliday + Temperature + Fuel_Price + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + MarkDown5 + CPI + Unemployment + WeekType_Low + WeekType_Medium + WeekType_High + Type_A + Type_B + Type_C + Dept_38 + Dept_92 + Dept_95, data = train) %>% stats::step(direction = "both")
+```
+
+```{r}
+# final regression
+
+final_model <- lm(formula = Weekly_Sales ~ Weekly_Sales_Prev + IsHoliday + Temperature + 
+    Fuel_Price + CPI + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + 
+    MarkDown5 + WeekType_Low + WeekType_Medium + Type_A + 
+    Type_B + Dept_38 + Dept_92 + Dept_95, data = train)
+
+library(stargazer)
+
+stargazer(final_model,  header=FALSE, align=TRUE, type="text", title="MLR Model")
+```
+
+```{r}
+lm_predict_train <- predict(final_model, data = train)
+lm_predict_test <- predict(final_model, newdata = test)
+
+
+data[index,'Predict_MLR'] <- lm_predict_train
+data[-index, 'Predict_MLR'] <- lm_predict_test
+
+
+head(data[-index,])
+```
+
+```{r}
+test_mlr.r <- data$Weekly_Sales[-index]
+
+test_mlr_predict.r <- data$Predict_MLR[-index]
+
+# Root Mean Squared Error of testing dataset
+
+rmse.test_mlr <- (sum((test_mlr.r - test_mlr_predict.r )^2)/84057)^0.5
+
+rmse.test_mlr
+```
+
+```{r}
+# MAE calculations
+
+library(Metrics)
+mae(data$Predict_MLR[-index], data$Weekly_Sales[-index])
+```
+
+```{r}
+# plot
+
+plot2011 <- data %>% filter(Year == 2011) %>% group_by(Week) %>% 
+  summarize(WeeklySales = sum(Weekly_Sales), WeeklyPrediction = sum(Predict_MLR))
+
+
+plot(x = plot2011$Week, y = plot2011$WeeklySales, col = 'Red', main ="Actual vs Predicted Weekly Sales - 2011", xlab = "Week", ylab = "Weekly Sales")
+
+lines(x = plot2011$Week, y = plot2011$WeeklyPrediction, col = 'blue')
+```
+
+```{r}
+# plot against test set
+test_plot <- data %>% group_by(Week) %>% 
+  summarise(WeeklySales = sum(Weekly_Sales[-index]), WeeklyPrediction = sum(Predict_MLR[-index]))
+
+plot(x = test_plot$Week, y = test_plot$WeeklySales, col = 'Red', main = "Actual vs Predicted Weekly Sales - Testing Data", xlab = "Weeks", ylab = "Weekly Sales")
+lines(x = test_plot$Week, y = test_plot$WeeklyPrediction, col = 'blue')
+```
+```{r}
+# plot against test set
+test_plot <- data %>% filter(Store == 1, Dept == 1) %>% group_by(Week) %>% 
+  summarise(WeeklySales = sum(Weekly_Sales[-index]), WeeklyPrediction = sum(Predict_MLR[-index]))
+
+plot(x = test_plot$Week, y = test_plot$WeeklySales, col = 'Red', main = "Actual vs Prediction - Store 1, Dept 1", xlab = "Weeks", ylab = "Weekly Sales")
+lines(x = test_plot$Week, y = test_plot$WeeklyPrediction, col = 'blue')
+```
+
+```{r}
+normalise <- function(x){ 
+  (x - min(x))/(max(x) - min(x)) 
+}
+
+
+scaled <- data %>% mutate_if(is.numeric, normalise)
+```
+
+
+```{r}
+index <- sample(seq_len(nrow(data)), size = floor(nrow(data) * 0.8))
+
+train_nn <- scaled[index,]
+test_nn <- scaled[-index,]
+```
+
+```{r}
+# optimize number of k neurons - run time too long
+#set.seed(123)
+#p <- c()
+#for (k in c(1,2,3,4,5,6,7,8,9,10)) {
+#  # Create NN with k neurons
+#  t_2 = neuralnet(formula = Weekly_Sales ~ Weekly_Sales_Prev + IsHoliday + Temperature + 
+#    Fuel_Price + CPI + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + 
+#    MarkDown5 + WeekType_Low + WeekType_Medium + Type_A + 
+#    Type_B + Dept_38 + Dept_92 + Dept_95, data = train_nn,
+#               hidden = k, 
+#               linear.output=TRUE, 
+#               err.fct = 'sse')
+#  # Fit the model using test data
+#  predict.t_2 <- compute(t_2,test_nn)
+#  
+#  fitted.train_nn <- nn$net.result[[1]] * #(max(data$Weekly_Sales)-min(data$Weekly_Sales))+min(data$Weekly_Sales)
+
+#train_nn.r <- data$Weekly_Sales[index]
+
+#rmse.train_nn <- (sum((train_nn.r - fitted.train_nn )^2)/nrow(fitted.train_nn))^0.5
+
+#rmse.train_nn
+  # Append to list
+#  p<-c(p,rmse_t_2)
+#}
+
+#nn_2 = neuralnet(formula = Weekly_Sales ~ Weekly_Sales_Prev + IsHoliday + Temperature + 
+#    Fuel_Price + CPI + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + 
+#    MarkDown5 + WeekType_Low + WeekType_Medium + Type_A + 
+#    Type_B + Dept_38 + Dept_92 + Dept_95, data = train_nn,
+#               hidden = (which.min(p)+6), 
+#               linear.output=TRUE, 
+#               err.fct = 'sse')
+
+
+```
+
+```{r}
+library(neuralnet)
+nn <- neuralnet(formula = Weekly_Sales ~ Weekly_Sales_Prev + IsHoliday + Temperature + 
+    Fuel_Price + CPI + MarkDown1 + MarkDown2 + MarkDown3 + MarkDown4 + 
+    MarkDown5 + WeekType_Low + WeekType_Medium + Type_A + 
+    Type_B + Dept_38 + Dept_92 + Dept_95, data = train_nn,
+               hidden = 1, 
+               linear.output=TRUE, 
+               err.fct = 'sse')
+```
+
+```{r}
+summary(nn)
+```
+
+```{r}
+nn$result.matrix['error',]
+```
+
+```{r}
+fitted.train_nn <- nn$net.result[[1]] * (max(data$Weekly_Sales)-min(data$Weekly_Sales))+min(data$Weekly_Sales)
+
+
+#use the index to get the original value of sales in train dataset. 
+train_nn.r <- data$Weekly_Sales[index]
+
+#calculate the Root Mean Squared Error of train dataset
+rmse.train_nn <- (sum((train_nn.r - fitted.train_nn )^2)/nrow(fitted.train_nn))^0.5
+
+rmse.train_nn
+```
+
+```{r}
+Predict.nn <- neuralnet::compute(nn, test_nn)
+
+#get the predicted sales in original scale
+Predict.nn_ <- Predict.nn$net.result[[1]] * (max(data$Weekly_Sales)-min(data$Weekly_Sales))+min(data$Weekly_Sales)
+
+test.r_nn <- data$Weekly_Sales[-index]
+
+rmse.test_nn <- (sum((test.r_nn - Predict.nn_)^2)/336228)^0.5
+
+rmse.test_nn
+```
+
+```{r}
+data[index,'Predict_NN'] <- fitted.train_nn
+data[-index,'Predict_NN'] <- Predict.nn_
+
+head(data[-index,])
+```
+
+
+```{r}
+library(Metrics)
+mae(data$Predict_NN[-index], data$Weekly_Sales[-index])
+```
+
+```{r}
+test_plot <- data %>% group_by(Week) %>% 
+  summarise(WeeklySales = sum(Weekly_Sales[-index]), WeeklyPrediction = sum(Predict_NN[-index]))
+
+plot(x = test_plot$Week, y = test_plot$WeeklySales, col = 'Red', main = "Actual vs Prediction - Testing Data", xlab = "Weeks", ylab = "Weekly Sales")
+lines(x = test_plot$Week, y = test_plot$WeeklyPrediction, col = 'blue')
+```
+
